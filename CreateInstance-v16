@@ -1,0 +1,162 @@
+echo off
+cd /d "%~dp0"
+set name=
+set area=
+set vmarea=
+set iparea=
+set vmtype=
+set x=
+set publicip=
+cls
+echo Create a Google Cloud Compute Engine for 3CX
+echo.
+echo.
+echo Define a name for this VM which will be included in all ordering processes.
+set /p name="Instance Name (syntax: [a-z](?:[-a-z0-9]{0,61}[a-z0-9]): "
+echo.
+echo The public IP will be labeled: %name%-ip
+echo The VM will be labeled: %name%-v16
+echo.
+echo Select in which location to create the instance. Select the closest location to you:
+echo 1. USA Central
+echo 2. USA East
+echo 3. USA West
+echo 4. Europe (West)
+echo 5. Asia (East)
+echo.
+CHOICE /C 12345 /M "Select a location:"
+
+IF ERRORLEVEL 1 (
+	set vmarea=us-central1-a
+	set iparea=us-central1
+	)
+IF ERRORLEVEL 2 (
+	set vmarea=us-east1-b
+	set iparea=us-east1
+	)
+IF ERRORLEVEL 3 (
+	set vmarea=us-west1-a
+	set iparea=us-west1
+	)
+IF ERRORLEVEL 4 (
+	set vmarea=europe-west1-b
+	set iparea=europe-west1
+	)
+IF ERRORLEVEL 5 (
+	set vmarea=asia-east1-a
+	set iparea=asia-east1
+	)
+	
+echo The VM %name%-v16 will be created in: %vmarea%
+echo.	
+echo Pick the VMsize to order (price excluding exgress traffic):
+echo 1. small (1 shared vCPU 1.7GB Ram 16$ pM estimated)
+echo 2. standard 1 (1 vCPU 3.75GB Ram 29$ pM estimated)
+echo 3. high 1 (2 vCPU 1.8GB Ram 44$ pM estimated)
+REM echo 4. micro (1 shared vCPU 0.6GB Ram 5$ pM estimated)
+echo.
+CHOICE /C 123 /M "Select the VM's performance:"
+
+IF ERRORLEVEL 1 (
+	set vmtype=g1-small
+	)
+IF ERRORLEVEL 2 (
+	set vmtype=n1-standard-1
+	)
+IF ERRORLEVEL 3 (
+	set vmtype=n1-highcpu-2
+	)
+IF ERRORLEVEL 4 (
+	set vmtype=f1-micro
+	)
+echo VM %name%-v16 in %vmarea% will be created as %vmtype%
+
+:OrderIP
+echo.
+echo Step 1: Ordering IP Address...
+call gcloud compute addresses create %name%-ip --region %iparea%
+set cmd="gcloud compute addresses list %name%-ip | find "%name%-ip" "
+FOR /F "tokens=3,*" %%a IN (' %cmd% ') DO SET X=%%a
+echo.
+set publicip=%x%
+set x=
+echo Public static IP address ordered (IP is: %publicip%)
+
+
+
+
+:OrderVM
+echo Step 2: Ordering VM %vmtype% in %vmarea%...
+echo.
+call gcloud compute instances create "%name%-v16" --description "Hosted Instance of %name%" --zone "%vmarea%" --machine-type "%vmtype%" --network "default" --address "%name%-ip" --maintenance-policy "MIGRATE" --tags "tcx","hosted","v16-0" --boot-disk-size "10" --boot-disk-type "pd-standard" --boot-disk-device-name "%name%-v16" --metadata startup-script-url=https://storage.googleapis.com/firstboot3cx/install3cxlinux.sh
+echo.																																																										                          
+echo Machine Ordered
+echo Booting VM...
+
+:Firewall
+echo.
+echo Step 3: Checking Firewall Configuration...
+echo Note: Default Firewall Setup will only cater for HTTPs port 443 or 5001 (alter script if other port is required)
+echo.
+set firewall="gcloud compute firewall-rules list pbxports | find "pbxports" "
+FOR /F "tokens=1,*" %%a IN (' %firewall% ') DO SET X=%%a
+echo %X%
+
+IF "%X%" equ "pbxports" GOTO FWDONE
+IF "%X%" neq "pbxports" GOTO FWDO
+
+ 
+:FWDO
+echo Firewall rules has not been created, creating...
+echo SIP Port:5060 5061
+echo Tunnel Port: 5090
+echo Web HTTPs Port: 5001 (and 443)
+echo Audio Ports: 9000-9500
+echo Wizard Port: 5015
+call gcloud compute firewall-rules create pbxports --allow tcp:5001,tcp:5090,udp:5090,tcp:5060,udp:5060,tcp:5061,udp:9000-9500,tcp:5015,tcp:443
+echo.
+echo Firewall rules created!
+GOTO Preparing
+ 
+:FWDONE
+echo Firewall Rules has been already created for 3CX
+GOTO Preparing
+
+
+:Preparing
+echo.
+echo.
+echo Installing 3CX in %name%-v16, do not abort countdown...
+TIMEOUT /T 120 /NOBREAK
+
+
+:Check
+echo Checking if 3CX is responding in VM: %name%-v16
+starter.exe %publicip% 5015
+if %errorlevel% == 0 goto :Start
+goto :notup
+
+:Start
+echo.
+echo.
+echo Your 3CX installation is now ready to be configured.
+echo The URL to your instance is: http://%publicip%:5015
+start http://%publicip%:5015 
+goto :Clean
+
+:notup
+echo 3CX is not yet responding.
+echo waiting for 5 seconds
+TIMEOUT /T 5 /NOBREAK
+goto Check
+
+:Clean
+set name=
+set area=
+set vmarea=
+set iparea=
+set x=
+
+echo.
+echo The VM has been succesfully created. You can close this window.
+pause
